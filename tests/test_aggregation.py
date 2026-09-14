@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from src.aggregation import AnomalyDetector, TumblingWindowAggregator, process_batch
+from src.aggregation import AnomalyDetector, TumblingWindowAggregator, WindowAggregate, process_batch
 
 
 def _ts(base: datetime, seconds: float) -> str:
@@ -54,6 +54,14 @@ def test_windows_are_independent_per_category():
     assert windows["toys"].revenue == 400.0
 
 
+def test_window_aggregate_average_order_value_handles_zero_orders():
+    # A freshly constructed aggregate has no orders yet — average_order_value
+    # divides by order_count, so this guards the zero-division branch.
+    w = WindowAggregate(window_start=datetime(2026, 1, 1, tzinfo=timezone.utc), category="empty")
+    assert w.order_count == 0
+    assert w.average_order_value == 0.0
+
+
 def test_anomaly_detector_flags_extreme_value_after_warmup():
     detector = AnomalyDetector(window_size=200, z_threshold=3.0, min_samples=30)
 
@@ -74,6 +82,23 @@ def test_anomaly_detector_silent_before_min_samples():
     for _ in range(10):
         alert = detector.check("beauty", 999999.0)
     assert alert is None
+
+
+def test_anomaly_detector_zero_variance_history():
+    # Once history is all-identical values, stddev is 0 — score() falls back
+    # to a signed sentinel instead of dividing by zero (see aggregation.py).
+    detector = AnomalyDetector(min_samples=5)
+
+    for _ in range(5):
+        detector.check("stationery", 42.0)
+
+    # Same value as the (zero-variance) history: not an outlier.
+    assert detector.score("stationery", 42.0) == 0.0
+
+    # Any deviation at all from a zero-variance history is "infinitely"
+    # anomalous — the sentinel is correctly signed either direction.
+    assert detector.score("stationery", 43.0) == 1_000_000.0
+    assert detector.score("stationery", 41.0) == -1_000_000.0
 
 
 def test_process_batch_end_to_end():
