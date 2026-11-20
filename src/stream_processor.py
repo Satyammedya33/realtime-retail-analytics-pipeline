@@ -10,7 +10,7 @@ from datetime import datetime
 
 from kafka import KafkaConsumer
 
-from .aggregation import AnomalyDetector, TumblingWindowAggregator
+from .aggregation import AnomalyDetector, TumblingWindowAggregator, is_order
 from .db import get_engine, get_session, init_db, insert_alert, upsert_window
 
 TOPIC = os.environ.get("KAFKA_TOPIC", "retail-events")
@@ -44,6 +44,8 @@ def run() -> None:
 
     for message in consumer:
         event = message.value
+        if not is_order(event):
+            continue
         ts = datetime.fromisoformat(event["timestamp"])
 
         emitted = aggregator.add_event(

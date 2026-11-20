@@ -60,6 +60,13 @@ class TumblingWindowAggregator:
         window_start = _floor_to_window(ts, self.window_seconds)
         existing = self._current.get(category)
 
+        if existing is not None and window_start < existing.window_start:
+            # Late event for an already-emitted window. Reopening it would
+            # emit a 1-event partial that upsert_window() writes over the full
+            # stored row. ponytail: dropped, no allowed-lateness buffer; add
+            # one if late volume matters.
+            return None
+
         emitted: Optional[WindowAggregate] = None
         if existing is not None and existing.window_start != window_start:
             emitted = existing
@@ -131,6 +138,11 @@ class AnomalyDetector:
         return None
 
 
+def is_order(event: dict) -> bool:
+    """Only placed orders count as revenue; abandoned carts are skipped."""
+    return event.get("event_type", "order_placed") == "order_placed"
+
+
 def process_batch(events: Iterable[dict], window_seconds: int = 60, z_threshold: float = 3.0):
     """Convenience driver used by tests and CLI tools: runs a batch of event
     dicts through both the aggregator and the anomaly detector."""
@@ -141,6 +153,8 @@ def process_batch(events: Iterable[dict], window_seconds: int = 60, z_threshold:
     alerts: List[dict] = []
 
     for event in events:
+        if not is_order(event):
+            continue
         ts = datetime.fromisoformat(event["timestamp"])
         emitted = aggregator.add_event(
             category=event["category"],
