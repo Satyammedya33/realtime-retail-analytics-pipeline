@@ -129,3 +129,31 @@ def test_process_batch_end_to_end():
 
     assert sum(w.order_count for w in windows) == len(events)
     assert any(a["event_id"] == "e-outlier" for a in alerts)
+
+
+def test_late_event_does_not_reopen_emitted_window():
+    agg = TumblingWindowAggregator(window_seconds=60)
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    for s in (0, 10, 20):
+        agg.add_event("x", 100.0, 1, base + timedelta(seconds=s))
+    emitted = agg.add_event("x", 100.0, 1, base + timedelta(seconds=65))
+    assert emitted.order_count == 3
+    # Late event for the closed window must not emit a partial window.
+    assert agg.add_event("x", 100.0, 1, base + timedelta(seconds=50)) is None
+    assert agg.add_event("x", 100.0, 1, base + timedelta(seconds=70)) is None
+    (w,) = agg.flush()
+    assert w.window_start == base + timedelta(seconds=60)
+    assert w.order_count == 2
+
+
+def test_process_batch_skips_abandoned_carts():
+    base = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    events = [
+        {"event_id": "a", "category": "x", "total_amount": 100.0, "quantity": 1,
+         "timestamp": base.isoformat(), "event_type": "order_placed"},
+        {"event_id": "b", "category": "x", "total_amount": 500.0, "quantity": 1,
+         "timestamp": base.isoformat(), "event_type": "cart_abandoned"},
+    ]
+    (w,), _ = process_batch(events)
+    assert w.order_count == 1
+    assert w.revenue == 100.0
